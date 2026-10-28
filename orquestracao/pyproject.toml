@@ -1,0 +1,19 @@
+[project]
+name = "medalhao"
+version = "1.0.0"
+description = "Orquestração do pipeline medalhão: Airbyte + dbt"
+requires-python = ">=3.11"
+dependencies = ["dagster", "dagster-webserver", "dagster-dbt", "dbt-postgres", "requests", "python-dotenv"]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["medalhao*"]
+
+# Diz ao comando `dagster dev` onde encontrar o objeto Definitions.
+# Sem isto você precisaria passar -m medalhao.definitions toda vez.
+[tool.dagster]
+module_name = "medalhao.definitions"
+code_location_name = "pipeline_medalhao"

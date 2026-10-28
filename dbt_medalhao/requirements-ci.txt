@@ -1,0 +1,16 @@
+# =============================================================================
+#  Dependências da esteira de CI (GitHub Actions)
+#
+#  Versões PINADAS de propósito. Sem pin, `pip install dbt-core` traria a
+#  última versão publicada no dia — e a esteira passaria a quebrar sozinha,
+#  sem ninguém ter mudado uma linha do projeto.
+#
+#  Estas são exatamente as versões validadas na execução de 2026-08-26:
+#      Running with dbt=1.12.3
+#      Registered adapter: postgres=1.11.0
+#
+#  Para atualizar: suba a versão aqui, deixe o CI rodar, e só então promova.
+# =============================================================================
+
+dbt-core==1.12.3
+dbt-postgres==1.11.0

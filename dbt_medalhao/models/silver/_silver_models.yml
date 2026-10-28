@@ -1,0 +1,177 @@
+version: 2
+
+# =============================================================================
+#  TESTES E DOCUMENTAÇÃO DA CAMADA SILVER
+#
+#  Todo teste aqui vira uma query SQL que precisa retornar ZERO linhas.
+#  Se retornar alguma, o teste falha e o `dbt build` para — o dado ruim não
+#  avança para a gold.
+#
+#  É a diferença entre "o script rodou sem erro" e "o dado está correto".
+#
+#  NOTA DE SINTAXE: a partir do dbt 1.10 os parâmetros de um teste genérico
+#  vão dentro de `arguments:`. A forma antiga (parâmetros soltos) ainda
+#  funciona, mas emite aviso de deprecação.
+# =============================================================================
+
+models:
+
+  - name: stg_propostas
+    description: >
+      Propostas limpas, tipadas e conformadas. Uma linha por proposta.
+      Sem regra de negócio — essa camada não sabe o que é inadimplência.
+
+    # ---- Testes de MODELO (avaliam a tabela inteira) ----
+    data_tests:
+      # Precisa ficar aqui, e não dentro da coluna: quando um
+      # expression_is_true está sob uma coluna, o dbt_utils prefixa o nome
+      # dela na expressão, e "documento length(documento) in (11,14)" não é
+      # SQL válido. No nível do modelo, a expressão vai inteira.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "length(documento) in (11, 14)"
+          config:
+            where: "documento is not null"
+
+      # A API usa 1900-01-01 como marcador de "sem vencimento". O modelo
+      # converte esse sentinel para NULL; toda data real deve ser plausível.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "data_vencimento >= date '2000-01-01'"
+          config:
+            where: "data_vencimento is not null"
+
+    columns:
+
+      - name: proposta_id
+        description: Chave técnica determinística (CNPJ da corretora + número da proposta).
+        data_tests:
+          - unique
+          - not_null
+
+      - name: numero_proposta
+        description: Número da proposta na origem.
+        data_tests:
+          - not_null
+
+      - name: corretora_id
+        description: CNPJ sem pontuação; FK para a corretora dona da proposta.
+        data_tests:
+          # Garante que toda proposta aponta para uma corretora que EXISTE.
+          # Pega o caso clássico de a corretora sumir da origem e as propostas
+          # dela virarem órfãs sem ninguém perceber.
+          - relationships:
+              arguments:
+                to: source('bronze', 'corretoras')
+                field: cnpj_limpo
+
+      - name: documento
+        description: CPF (11 díg.) ou CNPJ (14 díg.), só números, com zeros à esquerda.
+
+      - name: tipo_documento
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['CPF', 'CNPJ']
+
+      - name: data_criacao
+        description: Data de criação da proposta, convertida do texto da origem.
+        data_tests:
+          - not_null
+
+      - name: data_vencimento
+        description: >
+          Data de vencimento da cobrança. NULL quando a API envia o marcador
+          1900-01-01 (sem vencimento informado).
+
+      - name: forma_pagamento
+        description: Forma de pagamento conformada em domínio canônico.
+        data_tests:
+          # ⚠️ TESTE-SENTINELA: repare que 'NAO_MAPEADO' NÃO está na lista.
+          #
+          # O CASE do modelo joga qualquer valor desconhecido em
+          # 'NAO_MAPEADO'. Ao proibir esse valor aqui, transformamos "a origem          # inventou uma forma de pagamento nova" em uma FALHA VISÍVEL, em vez
+          # de um bucket silencioso que ninguém olha.
+          #
+          # É o padrão mais útil de teste em pipeline: não testar só o que você
+          # espera, mas fazer o inesperado gritar.
+          - accepted_values:
+              arguments:
+                values: ['CARTAO_CREDITO', 'DEBITO_AUTOMATICO', 'BOLETO', 'OUTROS']
+
+      - name: valor
+        description: Valor da proposta em reais.
+        data_tests:
+          - not_null
+          # Aqui a forma curta é a correta: sob uma coluna, o dbt_utils
+          # prefixa o nome dela → vira "valor >= 0".
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+
+      - name: carregado_em
+        description: Quando o Airbyte extraiu esta linha da origem.
+        data_tests:
+          - not_null
+
+
+  - name: stg_pendencias
+    description: >
+      Parcelas em aberto da origem, limpas e deduplicadas. A granularidade é
+      uma cobrança por corretora, certificado, competência e vencimento;
+      ainda não há agregação ou regra de priorização comercial nesta camada.
+
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "dias_atraso >= 0"
+
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "valor_pendente >= 0"
+
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "data_vencimento >= date '2000-01-01'"
+          config:
+            where: "data_vencimento is not null"
+
+    columns:
+      - name: pendencia_id
+        description: Chave técnica determinística da parcela em aberto.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: corretora_id
+        description: CNPJ limpo da corretora.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: source('bronze', 'corretoras')
+                field: cnpj_limpo
+
+      - name: numero_certificado
+        description: Certificado/apólice associado à parcela, quando informado pela origem.
+
+      - name: documento
+        description: CPF ou CNPJ do cliente, somente dígitos, quando informado.
+
+      - name: data_vencimento
+        description: Data de vencimento atual da cobrança.
+
+      - name: valor_pendente
+        description: Valor em aberto da parcela em reais.
+        data_tests:
+          - not_null
+
+      - name: dias_atraso
+        description: Dias de atraso reportados pela origem, limitado a zero no mínimo.
+        data_tests:
+          - not_null
+
+      - name: carregado_em
+        description: Momento da extração pelo Airbyte.
+        data_tests:
+          - not_null

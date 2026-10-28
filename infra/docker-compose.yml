@@ -1,0 +1,109 @@
+# =============================================================================
+#  Infra local do projeto medalhão
+#
+#  Sobe DOIS bancos Postgres separados, de propósito:
+#
+#   1. pg_origem     -> simula o sistema de onde os dados nascem (a "plataforma")
+#                       O Airbyte só LÊ daqui. Em produção você nunca teria
+#                       permissão de escrita numa origem.
+#
+#   2. pg_warehouse  -> nosso data warehouse, com os schemas bronze/silver/gold.
+#                       O Airbyte escreve na bronze; o dbt constrói silver e gold.
+#
+#  Portas propositalmente diferentes de 5432 para não colidir com um Postgres
+#  que você já tenha na máquina.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # ORIGEM — o "sistema legado" de onde extraímos
+  # ---------------------------------------------------------------------------
+  pg_origem:
+    image: postgres:16-alpine
+    container_name: pg_origem
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${ORIGEM_USER:-origem}
+      POSTGRES_PASSWORD: ${ORIGEM_PASSWORD:-origem123}
+      POSTGRES_DB: ${ORIGEM_DB:-origem_seguradoras}
+      # Sem isso o Postgres cria o banco com locale C e a ordenação de
+      # acentos fica errada ("Ávila" vindo depois de "Zanetti").
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5433:5432"
+    volumes:
+      - vol_origem:/var/lib/postgresql/data
+      # Todo .sql largado aqui roda UMA vez, na primeira criação do volume.
+      - ./init/origem:/docker-entrypoint-initdb.d:ro
+    command:
+      # ---- Preparando o terreno para CDC (Change Data Capture) ----
+      # O Airbyte consegue ler as mudanças direto do WAL (o log de transações
+      # do Postgres) em vez de dar SELECT na tabela inteira. Para isso o
+      # Postgres precisa nascer com wal_level=logical. Mudar depois exige
+      # restart, então já deixamos pronto.
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ORIGEM_USER:-origem} -d ${ORIGEM_DB:-origem_seguradoras}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # WAREHOUSE — destino do Airbyte e casa do dbt
+  # ---------------------------------------------------------------------------
+  pg_warehouse:
+    image: postgres:16-alpine
+    container_name: pg_warehouse
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DW_USER:-warehouse}
+      POSTGRES_PASSWORD: ${DW_PASSWORD:-warehouse123}
+      POSTGRES_DB: ${DW_DB:-dw_medalhao}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5434:5432"
+    volumes:
+      - vol_warehouse:/var/lib/postgresql/data
+      - ./init/warehouse:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DW_USER:-warehouse} -d ${DW_DB:-dw_medalhao}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # PGADMIN — interface web para inspecionar os dois bancos
+  # Opcional, mas ajuda muito a VER o dado se movendo entre as camadas.
+  # ---------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@local.dev}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - vol_pgadmin:/var/lib/pgadmin
+    depends_on:
+      pg_origem:
+        condition: service_healthy
+      pg_warehouse:
+        condition: service_healthy
+
+# Volumes nomeados: o dado sobrevive a `docker compose down`.
+# Para zerar tudo de verdade: `docker compose down -v`
+volumes:
+  vol_origem:
+  vol_warehouse:
+  vol_pgadmin:

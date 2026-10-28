@@ -1,0 +1,64 @@
+# =============================================================================
+#  Configuração de recursos do Airbyte para desenvolvimento local
+#
+#  Aplicar com:
+#      abctl local install --values infra/airbyte-values.yaml
+#
+#  ── POR QUE ISTO EXISTE ──────────────────────────────────────────────────
+#  Os defaults do Airbyte são dimensionados para servidor de produção. Um
+#  único job de replicação pede, por padrão:
+#
+#      orchestrator   cpu = 2
+#      source         cpu = 1
+#      destination    cpu = 1
+#      ─────────────────────
+#      TOTAL          cpu = 4
+#
+#  O cluster kind local tem 5 CPUs (limite do Docker Desktop), das quais
+#  ~1,05 já estão comprometidas com os pods da própria plataforma. Sobram
+#  3,95 — e o Kubernetes NÃO negocia: se o `request` não cabe, o pod fica
+#  em `Pending` para sempre, sem nem tentar rodar apertado.
+#
+#  Resultado: sync travado em Pending com
+#      "0/1 nodes are available: 1 Insufficient cpu"
+#
+#  ── REQUEST vs LIMIT ─────────────────────────────────────────────────────
+#  request = o que o scheduler RESERVA para decidir onde o pod cabe
+#  limit   = o teto que o container pode consumir em execução
+#
+#  Só o `request` afeta o agendamento. Por isso baixamos os requests e
+#  mantemos limits generosos: o job continua podendo usar CPU quando ela
+#  estiver ociosa, mas deixa de exigir reserva de servidor grande.
+#
+#  Nossos volumes são de centenas de linhas, não milhões — os valores
+#  abaixo sobram. Em produção, dimensione pelo volume real.
+# =============================================================================
+
+global:
+  env_vars:
+    # --- Job de replicação: o orquestrador do sync ---
+    REPLICATION_ORCHESTRATOR_CPU_REQUEST: "500m"
+    REPLICATION_ORCHESTRATOR_MEMORY_REQUEST: "1Gi"
+    REPLICATION_ORCHESTRATOR_CPU_LIMIT: "2"
+    REPLICATION_ORCHESTRATOR_MEMORY_LIMIT: "2Gi"
+
+    # --- Containers de connector (source e destination) durante o sync ---
+    JOB_MAIN_CONTAINER_CPU_REQUEST: "250m"
+    JOB_MAIN_CONTAINER_MEMORY_REQUEST: "512Mi"
+    JOB_MAIN_CONTAINER_CPU_LIMIT: "1"
+    JOB_MAIN_CONTAINER_MEMORY_LIMIT: "2Gi"
+
+    # --- Job de "check": testa a conexão ao salvar source/destination ---
+    CHECK_JOB_MAIN_CONTAINER_CPU_REQUEST: "100m"
+    CHECK_JOB_MAIN_CONTAINER_MEMORY_REQUEST: "256Mi"
+
+    # --- Job de "discover": lê o catálogo do banco de origem ---
+    DISCOVER_JOB_MAIN_CONTAINER_CPU_REQUEST: "100m"
+    DISCOVER_JOB_MAIN_CONTAINER_MEMORY_REQUEST: "256Mi"
+
+    # --- Sidecar que acompanha cada job ---
+    SIDECAR_MAIN_CONTAINER_CPU_REQUEST: "100m"
+    SIDECAR_MAIN_CONTAINER_MEMORY_REQUEST: "256Mi"
+
+# Novo total do pod de replicação: 500m + 250m + 250m = 1 CPU (+ sidecars).
+# Cabe com folga nas ~3,95 CPUs livres.

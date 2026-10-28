@@ -1,0 +1,58 @@
+# =============================================================================
+#  Conexão com o warehouse
+#
+#  Este arquivo diz ONDE o dbt escreve. O dbt_project.yml diz O QUE ele escreve.
+#
+#  Os valores usam env_var(NOME, PADRÃO): funciona direto no ambiente local
+#  (senhas triviais de Docker), e em outro ambiente basta exportar as
+#  variáveis para sobrescrever — sem editar o arquivo, sem vazar segredo.
+# =============================================================================
+
+medalhao:
+
+  # Qual target usar quando você roda `dbt run` sem argumentos.
+  target: dev
+
+  outputs:
+
+    # ---- DEV: warehouse local em Docker ----
+    dev:
+      type: postgres
+      host: "{{ env_var('DBT_HOST', 'localhost') }}"
+      port: "{{ env_var('DBT_PORT', '5432') | int }}"
+      user: "{{ env_var('DBT_USER', 'postgres') }}"
+      password: "{{ env_var('DBT_PASSWORD', 'postgres') }}"
+      dbname: "{{ env_var('DBT_DBNAME', 'dw_medalhao') }}"
+
+      # ---- TLS ----
+      # Sem esta linha o dbt conectava em TEXTO CLARO num servidor exposto na
+      # internet. O `?sslmode=require` do .env não resolvia: o
+      # orquestracao/medalhao/project.py usa urlparse e descarta a query
+      # string da URL, então o parâmetro nunca chegava até aqui — o
+      # `dbt debug` mostrava `sslmode: None` e ninguém tinha motivo de olhar.
+      #
+      # O default é condicional de propósito. Um `require` fixo quebraria todo
+      # uso local: nem o postgres:16 do CI nem o do docker-compose sobem com
+      # TLS, e o erro é `server does not support SSL, but SSL was required`.
+      # Então: localhost → disable; qualquer host remoto → require.
+      # Seguro por padrão onde importa, sem atrapalhar onde não há rede.
+      # DBT_SSLMODE sobrescreve os dois casos, se precisar.
+      sslmode: "{{ env_var('DBT_SSLMODE', 'disable' if env_var('DBT_HOST', 'localhost') in ['localhost', '127.0.0.1'] else 'require') }}"
+
+      # Schema padrão. Modelos sem `+schema` definido caem aqui.
+      schema: silver
+
+      # Quantos modelos o dbt constrói em paralelo. Cada thread abre uma
+      # conexão própria com o Postgres. 4 é confortável; subir demais só
+      # transfere a fila do dbt para o banco.
+      threads: 4
+
+      # Aborta uma query que passe de 5 min — evita travar o terminal por
+      # causa de um JOIN acidentalmente cartesiano.
+      keepalives_idle: 0
+      connect_timeout: 10
+
+# NOTA: usamos o usuário dbt_user, não o superusuário do banco.
+# Ele LÊ a bronze e ESCREVE na silver/gold — e nada além disso. Se um modelo
+# tentar escrever na bronze por engano, o Postgres recusa. A arquitetura
+# medalhão deixa de depender de disciplina e passa a ser garantida pelo banco.

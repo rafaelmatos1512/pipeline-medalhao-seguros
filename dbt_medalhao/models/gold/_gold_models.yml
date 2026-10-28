@@ -1,0 +1,247 @@
+version: 2
+
+# =============================================================================
+#  TESTES DA CAMADA GOLD
+#
+#  Os testes aqui são de natureza diferente dos da silver.
+#
+#  Na SILVER testamos INTEGRIDADE DO DADO: o CPF tem 11 dígitos? a data
+#  converteu? a chave é única?
+#
+#  Na GOLD testamos COERÊNCIA DAS REGRAS: as classificações se excluem? os
+#  totais fecham? o percentual está entre 0 e 100?
+#
+#  Um erro na silver corrompe o dado. Um erro na gold produz um número
+#  plausível e errado — que é pior, porque ninguém desconfia.
+# =============================================================================
+
+models:
+
+  - name: dim_corretora
+    description: >
+      Dimensão de tenancy da demonstração. Uma linha por corretora;
+      tenant_id e broker_id usam o próprio CNPJ para manter a rastreabilidade
+      sem inventar uma chave de negócio nova.
+
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "length(cnpj) = 14"
+
+    columns:
+      - name: broker_id
+        description: CNPJ limpo que identifica a corretora.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: tenant_id
+        description: Chave de isolamento lógico do tenant nesta prova de conceito.
+        data_tests:
+          - not_null
+
+      - name: cnpj
+        data_tests:
+          - not_null
+
+      - name: nome_corretora
+        data_tests:
+          - not_null
+
+
+  - name: fct_pendencias
+    description: >
+      Tabela fato de cobranças em aberto: uma linha por parcela pendente.
+      É a fonte operacional do dashboard de cobrança e preserva os contatos
+      apenas para usuários autorizados.
+
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "dias_atraso >= 0"
+
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "valor_pendente >= 0"
+
+    columns:
+      - name: pendencia_id
+        data_tests:
+          - unique
+          - not_null
+
+      - name: broker_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_corretora')
+                field: broker_id
+
+      - name: faixa_atraso
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['01_ATE_15_DIAS', '02_16_A_30_DIAS', '03_31_A_60_DIAS', '04_MAIS_60_DIAS']
+
+      - name: valor_pendente
+        data_tests:
+          - not_null
+
+      - name: dias_atraso
+        data_tests:
+          - not_null
+
+
+  - name: mart_cobranca
+    description: >
+      View operacional de cobrança, com contato do cliente e priorização por
+      atraso. Deve ser exposta somente à equipe autorizada, por conter dados
+      pessoais.
+
+    columns:
+      - name: tenant_id
+        data_tests:
+          - not_null
+
+      - name: faixa_atraso
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['01_ATE_15_DIAS', '02_16_A_30_DIAS', '03_31_A_60_DIAS', '04_MAIS_60_DIAS']
+
+
+  - name: mart_executivo_corretora
+    description: >
+      View consolidada por corretora para o dashboard executivo: funil de
+      propostas, valor convertido e exposição em atraso.
+
+    columns:
+      - name: broker_id
+        data_tests:
+          - unique
+          - not_null
+
+      - name: total_propostas
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+
+      - name: valor_em_atraso
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+
+  - name: fct_propostas
+    description: >
+      Tabela fato: uma linha por proposta, com métricas e classificações de
+      negócio (inadimplência, conversão, perda, faixa de atraso).
+
+    data_tests:
+      # Uma proposta não pode ser paga E inadimplente ao mesmo tempo.
+      # Se este teste falhar, a regra tem sobreposição lógica.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "not (is_convertida and is_inadimplente)"
+
+      # Nem perdida e paga ao mesmo tempo.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "not (is_perdida and is_convertida)"
+
+      # Atraso nunca é negativo — o greatest(0, ...) tem que estar cumprindo
+      # o papel dele.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "dias_atraso >= 0"
+
+    columns:
+      - name: proposta_id
+        data_tests:
+          - unique
+          - not_null
+
+      - name: situacao
+        description: Situação consolidada, um valor por proposta.
+        data_tests:
+          - not_null
+          # Domínio fechado. Este teste já cumpriu seu papel: na primeira
+          # execução ele falhou e revelou propostas com status de pagamento
+          # que a regra não previa (ATIVA, CANCELADA e DEVOLVIDA). Os três
+          # viraram categorias explícitas.
+          #
+          # Mantenha esta lista fechada. Se a origem criar um status novo,
+          # é melhor o build quebrar do que o número sair errado.
+          - accepted_values:
+              arguments:
+                values:
+                  - 'PAGA'
+                  - 'INADIMPLENTE'
+                  - 'A_VENCER'
+                  - 'PERDIDA'
+                  - 'ATIVA'
+                  - 'PAGAMENTO_CANCELADO'
+                  - 'DEVOLVIDA'
+                  - 'SEM_STATUS_PAGAMENTO'
+
+      - name: faixa_atraso
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - 'A_VENCER'
+                  - '01_ATE_30_DIAS'
+                  - '02_31_A_60_DIAS'
+                  - '03_61_A_90_DIAS'
+                  - '04_MAIS_90_DIAS'
+                  - 'SEM_VENCIMENTO'
+
+      - name: corretora
+        description: >
+          Razão social da corretora. Pode ser NULL se a corretora sumir da
+          origem — o LEFT JOIN preserva a proposta de propósito, em vez de
+          fazê-la desaparecer do relatório.
+
+      - name: valor
+        data_tests:
+          - not_null
+
+
+  - name: mart_inadimplencia_corretora
+    description: >
+      Uma linha por corretora, com volumes, valores e indicadores de
+      inadimplência e conversão. Consome fct_propostas — não repete regra.
+
+    columns:
+      - name: corretora_id
+        data_tests:
+          - unique
+          - not_null
+
+      - name: taxa_inadimplencia_pct
+        description: Percentual de propostas inadimplentes sobre o total.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "between 0 and 100"
+              config:
+                where: "taxa_inadimplencia_pct is not null"
+
+      - name: taxa_conversao_pct
+        data_tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "between 0 and 100"
+              config:
+                where: "taxa_conversao_pct is not null"
+
+      - name: total_propostas
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"

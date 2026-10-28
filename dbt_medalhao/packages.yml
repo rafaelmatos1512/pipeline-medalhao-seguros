@@ -1,0 +1,14 @@
+# =============================================================================
+#  Pacotes dbt (instalar com `dbt deps`)
+#
+#  dbt_utils é praticamente parte do dbt na prática — é mantido pela própria
+#  dbt Labs e traz testes e macros que todo projeto acaba precisando:
+#    - expression_is_true   testa uma condição SQL arbitrária
+#    - unique_combination_of_columns   chave composta
+#    - date_spine           gera uma série de datas (útil na gold)
+#    - star                 seleciona todas as colunas menos algumas
+# =============================================================================
+
+packages:
+  - package: dbt-labs/dbt_utils
+    version: [">=1.1.0", "<2.0.0"]

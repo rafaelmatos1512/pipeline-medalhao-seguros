@@ -1,0 +1,61 @@
+# =============================================================================
+#  Manifesto do projeto dbt
+#
+#  É o arquivo que diz ao dbt "aqui começa um projeto". Sem ele, o comando
+#  `dbt run` nem reconhece a pasta.
+# =============================================================================
+
+name: 'dbt_medalhao'
+version: '1.0.0'
+
+# Qual bloco do profiles.yml usar para conectar no banco.
+# Separar credencial (profiles.yml) de código (dbt_project.yml) é proposital:
+# o mesmo projeto roda em dev, staging e prod só trocando o profile.
+profile: 'medalhao'
+
+# --- Onde o dbt procura cada tipo de arquivo ---
+model-paths:   ["models"]      # os SELECTs que viram tabelas/views
+seed-paths:    ["seeds"]       # CSVs pequenos versionados (ex: tabelas de-para)
+test-paths:    ["tests"]       # testes SQL customizados
+macro-paths:   ["macros"]      # funções Jinja reutilizáveis
+snapshot-paths: ["snapshots"]  # captura de histórico (SCD tipo 2)
+
+clean-targets:                 # o que `dbt clean` apaga
+  - "target"
+  - "dbt_packages"
+
+
+# =============================================================================
+#  MATERIALIZAÇÃO — a decisão mais importante de cada modelo
+#
+#  Você escreve sempre um SELECT. O que muda é o que o dbt faz com ele:
+#
+#   view        CREATE VIEW ...            constrói rápido, consulta lenta
+#                                          (o SELECT roda toda vez que alguém
+#                                           consulta)
+#
+#   table       CREATE TABLE AS SELECT     constrói lento, consulta rápida
+#                                          (o resultado fica materializado)
+#
+#   incremental só processa o que é novo   para tabelas grandes; mais complexo
+#
+#   ephemeral   vira um CTE no modelo      não existe no banco; só organiza
+#               que o referencia            código
+#
+#  Nossa escolha abaixo segue a regra prática do medalhão:
+#   - silver = view   → é transformação barata (limpeza), e queremos que reflita
+#                       a bronze na hora. Zero custo de armazenamento.
+#   - gold   = table  → é agregação cara, consultada muitas vezes por relatório.
+#                       Vale pagar uma vez na construção.
+# =============================================================================
+
+models:
+  dbt_medalhao:
+
+    silver:
+      +materialized: view
+      +schema: silver        # escreve no schema `silver` do dw_medalhao
+
+    gold:
+      +materialized: table
+      +schema: gold

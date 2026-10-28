@@ -1,0 +1,73 @@
+version: 2
+
+# =============================================================================
+#  SOURCES — a fronteira entre o Airbyte e o dbt
+#
+#  Declaramos aqui as tabelas que o dbt LÊ mas NÃO CRIA. São o produto do
+#  Airbyte. O dbt nunca escreve nelas (e o usuário dbt_user nem teria
+#  permissão para isso).
+#
+#  Por que declarar em vez de escrever "FROM bronze.propostas" direto no SQL?
+#
+#   1. Rastreabilidade — o lineage do dbt mostra que a silver depende do
+#      Airbyte, não de uma tabela que surgiu do nada.
+#   2. Testes na entrada — dá para validar o dado ANTES de transformar, e
+#      descobrir que a origem quebrou em vez de descobrir que o relatório
+#      ficou estranho.
+#   3. Freshness — o dbt sabe avisar "o Airbyte não roda há 2 dias".
+#   4. Um lugar só para mudar — se a bronze virar `bronze_origem`, você edita
+#      aqui, não em 15 modelos.
+# =============================================================================
+
+sources:
+  - name: bronze
+    description: >
+      Camada RAW, escrita exclusivamente pelo Airbyte a partir do sistema de origem. Imutável: nada aqui é editado à mão.
+    schema: bronze
+
+    # ---- Monitoramento de atualidade ----
+    # O Airbyte carimba cada linha com _airbyte_extracted_at. O dbt usa essa
+    # coluna para responder "quando foi a última vez que este dado chegou?".
+    # `dbt source freshness` avisa (warn) com 1 dia e falha (error) com 3.
+    loaded_at_field: _airbyte_extracted_at
+    freshness:
+      warn_after:  {count: 24, period: hour}
+      error_after: {count: 72, period: hour}
+
+    tables:
+
+      - name: propostas
+        description: >
+          Uma linha por proposta de seguro, como veio da origem.
+          Dados crus, acrescidos do CNPJ e da razão social da
+          corretora.
+        columns:
+          - name: numero_proposta
+            description: Número da proposta na origem.
+            data_tests:
+              - not_null
+          - name: corretora_cnpj
+            description: CNPJ da corretora dona da proposta.
+            data_tests:
+              - not_null
+
+      - name: corretoras
+        description: Corretoras parceiras. Uma linha por CNPJ.
+        columns:
+          - name: cnpj_limpo
+            description: CNPJ com 14 dígitos, sem pontuação.
+            data_tests:
+              - not_null
+
+      - name: pendencias
+        description: >
+          Parcelas pendentes do relatório de inadimplência da origem, sempre identificadas pelo CNPJ da corretora.
+          Cada carga é preservada como uma fotografia diária no Bronze.
+        columns:
+          - name: corretora_cnpj
+            data_tests:
+              - not_null
+          - name: numero_certificado
+          - name: competencia
+          - name: snapshot_id
+            description: Identificador comum da fotografia diária de pendências.

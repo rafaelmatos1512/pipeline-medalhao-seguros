@@ -1,0 +1,59 @@
+# =============================================================================
+#  CREDENCIAIS — nunca versionar
+#  Segredo que vai para o Git não sai mais: mesmo apagando o arquivo depois, ele
+#  fica no histórico. A única correção de verdade é rotacionar a senha.
+# =============================================================================
+.env
+.env.*
+!.env.example
+**/.env
+!**/.env.example
+
+# SQL com senha preenchida e arquivos de senha gerada ficam só na máquina de
+# quem executa, nunca no repositório.
+*_PREENCHIDO.sql
+senhas.txt
+
+# Ambiente virtual Python
+# NOTA: `.venv/` (com barra) NÃO casa `.venv_ci` — precisa de entrada própria.
+# O CI cria esse venv dentro de dbt_medalhao para isolar o dbt-core do
+# dbt fusion; quem replicar a esteira localmente não deve commitá-lo.
+.venv/
+venv/
+.venv_ci/
+**/.venv_ci/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# dbt — artefatos gerados, não fonte
+dbt_medalhao/target/
+dbt_medalhao/dbt_packages/
+dbt_medalhao/logs/
+# NOTA: o profiles.yml É versionado neste projeto. Ele não contém segredo:
+# usa env_var(NOME, PADRÃO) com senhas triviais do Docker local, e qualquer
+# credencial real entra por variável de ambiente.
+
+# Dagster
+orquestracao/.dagster_home/
+orquestracao/tmp*/
+*.dagster*
+
+# Dados brutos locais
+dados_brutos/
+*.json.gz
+downloads*/
+
+# Logs
+*.log
+logs/
+
+# macOS & IDE / Tooling
+.DS_Store
+.agents/
+.gemini/
+.overclock-app/
+.claude/
+
+dbt_medalhao/.user.yml
+*.concurrent-update-lock
